@@ -85,6 +85,7 @@ district_df = pd.DataFrame(
 # =========================
 # Deprem Kataloğu (KOD İÇİNDE)
 # =========================
+# Ne kadar çok kayıt eklersen, ilçeler arası fark o kadar belirginleşir.
 QUAKES = [
     {"time": "2025-12-10 03:12:10", "lat": 40.98, "lon": 28.72, "mag": 3.1, "depth_km": 9.8},
     {"time": "2025-12-11 06:40:00", "lat": 41.00, "lon": 28.65, "mag": 2.8, "depth_km": 12.0},
@@ -228,6 +229,7 @@ def summarize_roll30(sub: pd.DataFrame):
         "roll30_energy_rate_30d": er30,
     }
 
+# ✅ DEĞİŞTİRİLMİŞ: komşu hücrelerde "ilk bulduğunu" değil, merkeze en yakın olanı seçiyor
 def compute_roll30_features(
     quake_df: pd.DataFrame,
     lat_bin: float,
@@ -237,44 +239,56 @@ def compute_roll30_features(
     center_lon: float,
     fallback_radius_km: float = 30.0
 ):
-    """
-    1) Hücre (0.1x0.1) içinden hesap
-    2) Boşsa komşu hücrelerden
-    3) Hâlâ boşsa radius fallback
-    """
     start_dt = datetime.datetime.combine(as_of_date - datetime.timedelta(days=30), datetime.time.min)
     end_dt = datetime.datetime.combine(as_of_date, datetime.time.min)
     dfw = quake_df[(quake_df["time"] >= start_dt) & (quake_df["time"] < end_dt)].copy()
 
-    # 1) aynı hücre
+    # 1) Aynı hücre
     sub = dfw[
         (dfw["lat"] >= lat_bin) & (dfw["lat"] < lat_bin + 0.1) &
         (dfw["lon"] >= lon_bin) & (dfw["lon"] < lon_bin + 0.1)
     ].copy()
     if len(sub) > 0:
-        feats = summarize_roll30(sub); feats["_source"] = "cell"; return feats
+        feats = summarize_roll30(sub)
+        feats["_source"] = "cell"
+        return feats
 
-    # 2) komşu hücreler (1 halka)
+    # 2) Komşu hücreler: en yakın hücreyi seç
+    candidates = []
     for dlat in [-0.1, 0.0, 0.1]:
         for dlon in [-0.1, 0.0, 0.1]:
             if dlat == 0.0 and dlon == 0.0:
                 continue
             lb = lat_bin + dlat
             ob = lon_bin + dlon
+
             s2 = dfw[
                 (dfw["lat"] >= lb) & (dfw["lat"] < lb + 0.1) &
                 (dfw["lon"] >= ob) & (dfw["lon"] < ob + 0.1)
             ].copy()
-            if len(s2) > 0:
-                feats = summarize_roll30(s2); feats["_source"] = "neighbor_cell"; return feats
 
-    # 3) radius fallback
+            if len(s2) > 0:
+                cell_center_lat = lb + 0.05
+                cell_center_lon = ob + 0.05
+                dist = haversine_km(center_lat, center_lon, cell_center_lat, cell_center_lon)
+                candidates.append((dist, s2))
+
+    if candidates:
+        candidates.sort(key=lambda x: x[0])  # en yakın hücre
+        best_sub = candidates[0][1]
+        feats = summarize_roll30(best_sub)
+        feats["_source"] = "neighbor_cell_nearest"
+        return feats
+
+    # 3) Radius fallback
     dfw["_dist_km"] = dfw.apply(
         lambda r: haversine_km(center_lat, center_lon, float(r["lat"]), float(r["lon"])),
         axis=1
     )
     s3 = dfw[dfw["_dist_km"] <= fallback_radius_km].copy()
-    feats = summarize_roll30(s3); feats["_source"] = "radius"; return feats
+    feats = summarize_roll30(s3)
+    feats["_source"] = "radius"
+    return feats
 
 # =========================
 # Arayüz
@@ -307,8 +321,10 @@ with tab1:
         default_depth_km = 10.0  # UI'dan kaldırıldı
         start_date = st.date_input("Başlangıç Tarihi", datetime.date.today(), key="start_date_reg")
 
+    # İlçeye göre (katalogdan) otomatik hesap
     auto_reg = compute_reg_features_from_dataset(quake_catalog, input_lat, input_lon, start_date, radius_km=30.0)
 
+    # İlçe/tarih değişince UI değerlerini otomatik güncelle
     reg_ctx = f"{selected_district}|{start_date.isoformat()}"
     if st.session_state.get("last_reg_ctx") != reg_ctx:
         st.session_state["last_reg_ctx"] = reg_ctx
@@ -354,10 +370,10 @@ with tab1:
                 "energy_rate_30d": float(default_er30),
                 "energy_90d": float(default_e90),
                 "energy_rate_90d": float(default_er90),
-                "log_energy_30d": log_e30,
-                "log_energy_90d": log_e90,
-                "log_energy_rate_30d": log_er30,
-                "log_energy_rate_90d": log_er90,
+                "log_energy_30d": float(np.log1p(default_e30)),
+                "log_energy_90d": float(np.log1p(default_e90)),
+                "log_energy_rate_30d": float(np.log1p(default_er30)),
+                "log_energy_rate_90d": float(np.log1p(default_er90)),
                 "month": df_date["month"],
                 "dow": df_date["dow"],
                 "dayofyear": df_date["dayofyear"],
@@ -377,7 +393,7 @@ with tab1:
             st.error(f"Tahmin hatası: {e}")
 
 # =========================================================
-# TAB 2: SINIFLANDIRMA (Deprem Olasılığı)
+# TAB 2: SINIFLANDIRMA
 # =========================================================
 with tab2:
     st.header("İlçe Bazlı 1 Haftalık Deprem Olasılığı (M ≥ 3.0)")
@@ -398,14 +414,13 @@ with tab2:
 
         start_date_c = st.date_input("Başlangıç Tarihi", datetime.date.today(), key="start_date_c")
 
-    # ✅ Otomatik 30 günlük feature (katalogdan)
     auto_feats = compute_roll30_features(
         quake_catalog, lat_bin, lon_bin, start_date_c,
         center_lat=c_lat, center_lon=c_lon,
         fallback_radius_km=30.0
     )
 
-    # İlçe/tarih değişince UI state güncelle (0 kalmasın)
+    # İlçe/tarih değişince UI state'e yaz (UI 0 kalmasın)
     ctx = f"{selected_district_c}|{start_date_c.isoformat()}|{lat_bin:.1f}|{lon_bin:.1f}"
     if st.session_state.get("last_roll30_ctx") != ctx:
         st.session_state["last_roll30_ctx"] = ctx
@@ -424,7 +439,7 @@ with tab2:
         roll30_energy_rate = float(auto_feats["roll30_energy_rate_30d"])
 
         src = auto_feats.get("_source", "cell")
-        src_map = {"cell": "aynı hücre", "neighbor_cell": "komşu hücre", "radius": "yakın çevre (radius)"}
+        src_map = {"cell": "aynı hücre", "neighbor_cell_nearest": "komşu hücre (en yakın)", "radius": "yakın çevre (radius)"}
         st.caption(f"30 günlük değerler katalogdan otomatik dolduruldu (kaynak: **{src_map.get(src, src)}**).")
 
     if st.button("1 Haftalık Risk Hesapla", type="primary", key="btn_clf"):
