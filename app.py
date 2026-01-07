@@ -3,7 +3,6 @@ import pandas as pd
 import numpy as np
 import joblib
 import datetime
-from pathlib import Path
 
 # =========================
 # Sayfa Ayarları
@@ -34,7 +33,7 @@ def load_models():
 rf_reg, rf_clf = load_models()
 
 # =========================
-# İLÇE -> KOORDİNAT (CSV YOK)
+# İLÇE -> KOORDİNAT
 # =========================
 DISTRICTS = {
     "Adalar": (40.8739, 29.1236),
@@ -83,6 +82,36 @@ district_df = pd.DataFrame(
 ).sort_values("ilce_adi").reset_index(drop=True)
 
 # =========================
+# Deprem Kataloğu (KOD İÇİNDE)
+# =========================
+# time formatı: "YYYY-MM-DD HH:MM:SS"
+# Buraya kendi kayıtlarını ekleyebilirsin.
+QUAKES = [
+    {"time": "2025-12-10 03:12:10", "lat": 40.9792, "lon": 28.7214, "mag": 3.1, "depth_km": 9.8},
+    {"time": "2025-12-12 14:05:00", "lat": 40.9833, "lon": 28.8725, "mag": 2.7, "depth_km": 11.2},
+    {"time": "2025-12-18 09:41:22", "lat": 40.9917, "lon": 29.0275, "mag": 3.4, "depth_km": 7.5},
+    {"time": "2025-12-22 21:18:45", "lat": 41.0009, "lon": 28.7906, "mag": 3.0, "depth_km": 10.0},
+    {"time": "2025-12-28 06:55:10", "lat": 41.0186, "lon": 28.9390, "mag": 2.9, "depth_km": 8.0},
+    {"time": "2026-01-02 00:11:02", "lat": 41.0390, "lon": 28.8564, "mag": 3.2, "depth_km": 12.0},
+]
+
+@st.cache_data
+def load_quake_catalog_from_code(quakes: list[dict]) -> pd.DataFrame:
+    df = pd.DataFrame(quakes).copy()
+    df["time"] = pd.to_datetime(df["time"], errors="coerce")
+    df = df.dropna(subset=["time", "lat", "lon", "mag"]).copy()
+    df["lat"] = df["lat"].astype(float)
+    df["lon"] = df["lon"].astype(float)
+    df["mag"] = df["mag"].astype(float)
+    if "depth_km" in df.columns:
+        df["depth_km"] = pd.to_numeric(df["depth_km"], errors="coerce")
+    else:
+        df["depth_km"] = np.nan
+    return df
+
+quake_catalog = load_quake_catalog_from_code(QUAKES)
+
+# =========================
 # Yardımcılar
 # =========================
 def derive_date_features(d: datetime.date):
@@ -91,71 +120,14 @@ def derive_date_features(d: datetime.date):
 def week_dates(start_date: datetime.date, days: int = 7):
     return [start_date + datetime.timedelta(days=i) for i in range(days)]
 
-# -------------------------
-# Deprem kataloğu (opsiyonel)
-# -------------------------
-@st.cache_data
-def load_quake_catalog(path: str = "earthquakes.csv") -> pd.DataFrame | None:
-    """
-    Beklenen kolonlar (en az):
-      - time (datetime parse edilebilir)
-      - lat, lon (float)
-      - mag (float)
-    Opsiyonel:
-      - depth_km (float)
-    """
-    p = Path(path)
-    if not p.exists():
-        return None
-    try:
-        df = pd.read_csv(p)
-        # olası kolon isimlerini normalize et
-        colmap = {}
-        for c in df.columns:
-            lc = c.strip().lower()
-            if lc in ["time", "datetime", "date", "event_time", "origin_time"]:
-                colmap[c] = "time"
-            elif lc in ["lat", "latitude"]:
-                colmap[c] = "lat"
-            elif lc in ["lon", "lng", "longitude"]:
-                colmap[c] = "lon"
-            elif lc in ["mag", "magnitude", "mw", "ml"]:
-                colmap[c] = "mag"
-            elif lc in ["depth", "depth_km", "dep"]:
-                colmap[c] = "depth_km"
-        df = df.rename(columns=colmap)
-
-        required = {"time", "lat", "lon", "mag"}
-        if not required.issubset(set(df.columns)):
-            return None
-
-        df["time"] = pd.to_datetime(df["time"], errors="coerce", utc=True).dt.tz_convert(None)
-        df = df.dropna(subset=["time", "lat", "lon", "mag"]).copy()
-        df["lat"] = df["lat"].astype(float)
-        df["lon"] = df["lon"].astype(float)
-        df["mag"] = df["mag"].astype(float)
-
-        if "depth_km" in df.columns:
-            df["depth_km"] = pd.to_numeric(df["depth_km"], errors="coerce")
-
-        return df
-    except Exception:
-        return None
-
 def mag_to_energy(m: float) -> float:
     # Gutenberg–Richter yaklaşık enerji ilişkisi (erg): log10(E) = 1.5M + 4.8
-    # burada E = 10^(1.5M + 4.8)
     return float(10 ** (1.5 * m + 4.8))
 
 def compute_roll30_features(quake_df: pd.DataFrame, lat_bin: float, lon_bin: float, as_of_date: datetime.date):
-    """
-    as_of_date'e göre geriye dönük 30 gün (as_of_date hariç) içinde
-    ilgili 0.1x0.1 hücredeki olaylardan feature üretir.
-    """
     start_dt = datetime.datetime.combine(as_of_date - datetime.timedelta(days=30), datetime.time.min)
     end_dt = datetime.datetime.combine(as_of_date, datetime.time.min)
 
-    # Hücre filtresi (0.1 derece bin)
     lat0, lat1 = lat_bin, lat_bin + 0.1
     lon0, lon1 = lon_bin, lon_bin + 0.1
 
@@ -179,7 +151,7 @@ def compute_roll30_features(quake_df: pd.DataFrame, lat_bin: float, lon_bin: flo
     maxmag = float(sub["mag"].max())
     meanmag = float(sub["mag"].mean())
 
-    if "depth_km" in sub.columns and sub["depth_km"].notna().any():
+    if sub["depth_km"].notna().any():
         meandepth = float(sub["depth_km"].dropna().mean())
     else:
         meandepth = 0.0
@@ -196,8 +168,6 @@ def compute_roll30_features(quake_df: pd.DataFrame, lat_bin: float, lon_bin: flo
         "roll30_energy_30d": e30,
         "roll30_energy_rate_30d": er30,
     }
-
-quake_catalog = load_quake_catalog("earthquakes.csv")
 
 # =========================
 # Arayüz
@@ -224,13 +194,12 @@ with tab1:
         input_lon = float(row["lon"])
         st.caption(f"Seçilen ilçe merkez koordinatı: **{input_lat:.5f}, {input_lon:.5f}**")
 
-        # ✅ Derinlik UI’dan kaldırıldı -> arkada sabit değer
+        # Derinlik UI'dan kaldırıldı (arkada sabit)
         default_depth_km = 10.0
 
         start_date = st.date_input("Başlangıç Tarihi", datetime.date.today())
 
     with c2:
-        # ✅ "UI’dan kaldırıldı" yazısı silindi; alt kısım aynen duruyor
         st.subheader("⚙️ Arka Plan Varsayılanları")
         with st.expander("Varsayılan değerleri gör / değiştir"):
             default_fault_dist = st.number_input("fault_distance (km) [default]", value=5.0)
@@ -256,7 +225,6 @@ with tab1:
                 "date": d,
                 "lat": input_lat,
                 "lon": input_lon,
-                # ✅ model inputu korumak için depth_km sabit
                 "depth_km": float(default_depth_km),
                 "fault_distance": float(default_fault_dist),
                 "b_value": float(default_b_value),
@@ -309,13 +277,9 @@ with tab2:
 
         start_date_c = st.date_input("Başlangıç Tarihi", datetime.date.today(), key="start_date_c")
 
-    # ✅ Son 30 gün feature’larını otomatik hesapla (katalog varsa),
-    # ama UI’da varsayılan olarak göster ve kullanıcı isterse override etsin.
-    auto_feats = None
-    if quake_catalog is not None:
-        auto_feats = compute_roll30_features(quake_catalog, lat_bin, lon_bin, start_date_c)
+    # Otomatik (kod içi katalogdan) hesaplanmış varsayılanlar
+    auto_feats = compute_roll30_features(quake_catalog, lat_bin, lon_bin, start_date_c)
 
-    # Varsayılanlar: katalog varsa otomatik; yoksa eski sabitler
     defv = {
         "roll30_count": 5.0,
         "roll30_maxmag": 3.5,
@@ -324,23 +288,21 @@ with tab2:
         "roll30_energy_30d": 1000.0,
         "roll30_energy_rate_30d": 10.0
     }
-    if auto_feats is not None:
-        defv.update(auto_feats)
+    defv.update(auto_feats)
 
     with c2:
+        # UI'da varsayılan olarak otomatik hesaplanan değerler görünür.
+        # Kullanıcı isterse override eder.
         roll30_count = st.number_input("Son 30 gündeki deprem sayısı", value=float(defv["roll30_count"]))
         roll30_maxmag = st.number_input("Son 30 gündeki maks. büyüklük", value=float(defv["roll30_maxmag"]))
         roll30_meanmag = st.number_input("Son 30 gündeki ort. büyüklük", value=float(defv["roll30_meanmag"]))
         roll30_depth = st.number_input("Son 30 gündeki ort. derinlik", value=float(defv["roll30_depth"]))
 
-        # enerji UI yok -> arkada hesap (katalog varsa) yoksa default
+        # enerji UI yok -> arkada otomatik
         roll30_energy = float(defv["roll30_energy_30d"])
         roll30_energy_rate = float(defv["roll30_energy_rate_30d"])
 
-        if quake_catalog is None:
-            st.info("Otomatik 30 günlük hesap için 'earthquakes.csv' bulunamadı. UI değerleri kullanılacak.")
-        else:
-            st.caption("30 günlük değerler katalogdan otomatik dolduruldu (istersen elle değiştirebilirsin).")
+        st.caption("30 günlük değerler kod içindeki katalogdan otomatik dolduruldu (istersen elle değiştirebilirsin).")
 
     if st.button("1 Haftalık Risk Hesapla", type="primary"):
         dates = week_dates(start_date_c, 7)
@@ -349,34 +311,19 @@ with tab2:
         for d in dates:
             df_date = derive_date_features(d)
 
-            # İstersen her gün için de rolling 30 gün hesaplatabilirsin:
-            # katalog varsa d'ye göre her gün ayrı hesap, yoksa UI override.
-            if quake_catalog is not None:
-                feats_d = compute_roll30_features(quake_catalog, lat_bin, lon_bin, d)
-                r_count = float(feats_d["roll30_count"])
-                r_maxmag = float(feats_d["roll30_maxmag"])
-                r_meanmag = float(feats_d["roll30_meanmag"])
-                r_depth = float(feats_d["roll30_depth"])
-                r_e = float(feats_d["roll30_energy_30d"])
-                r_er = float(feats_d["roll30_energy_rate_30d"])
-            else:
-                r_count = float(roll30_count)
-                r_maxmag = float(roll30_maxmag)
-                r_meanmag = float(roll30_meanmag)
-                r_depth = float(roll30_depth)
-                r_e = float(roll30_energy)
-                r_er = float(roll30_energy_rate)
+            # Her gün için rolling 30 gün otomatik hesap
+            feats_d = compute_roll30_features(quake_catalog, lat_bin, lon_bin, d)
 
             rows.append({
                 "date": d,
                 "lat_bin": float(lat_bin),
                 "lon_bin": float(lon_bin),
-                "roll30_count": r_count,
-                "roll30_maxmag": r_maxmag,
-                "roll30_meanmag": r_meanmag,
-                "roll30_depth": r_depth,
-                "roll30_energy_30d": r_e,
-                "roll30_energy_rate_30d": r_er,
+                "roll30_count": float(feats_d["roll30_count"]),
+                "roll30_maxmag": float(feats_d["roll30_maxmag"]),
+                "roll30_meanmag": float(feats_d["roll30_meanmag"]),
+                "roll30_depth": float(feats_d["roll30_depth"]),
+                "roll30_energy_30d": float(feats_d["roll30_energy_30d"]),
+                "roll30_energy_rate_30d": float(feats_d["roll30_energy_rate_30d"]),
                 "month": df_date["month"],
                 "dow": df_date["dow"],
                 "dayofyear": df_date["dayofyear"],
