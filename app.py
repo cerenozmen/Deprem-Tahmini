@@ -200,7 +200,6 @@ def compute_reg_features_from_dataset(quake_df: pd.DataFrame, center_lat: float,
         "energy_rate_30d": float(er30),
         "energy_90d": float(e90),
         "energy_rate_90d": float(er90),
-        # debug için:
         "_n30": int(len(sub30)),
     }
 
@@ -233,7 +232,6 @@ def summarize_roll30(sub: pd.DataFrame):
         "roll30_energy_rate_30d": er30,
     }
 
-# ✅ komşu hücrelerde "ilk bulduğunu" değil, merkeze en yakın olanı seçer
 def compute_roll30_features(
     quake_df: pd.DataFrame,
     lat_bin: float,
@@ -325,14 +323,13 @@ with tab1:
         default_depth_km = 10.0  # UI'dan kaldırıldı
         start_date = st.date_input("Başlangıç Tarihi", datetime.date.today(), key="start_date_reg")
 
-        radius_km = st.slider("Katalog arama yarıçapı (km)", 10, 150, 30, key="radius_reg")
-
+    # radius sabit: 30km
     auto_reg = compute_reg_features_from_dataset(
-        quake_catalog, input_lat, input_lon, start_date, radius_km=float(radius_km)
+        quake_catalog, input_lat, input_lon, start_date, radius_km=30.0
     )
 
-    # ✅ KESİN ÇÖZÜM: ilçe/tarih/radius değişince widget state'lerini güncelle + rerun
-    reg_ctx = f"{selected_district}|{start_date.isoformat()}|{int(radius_km)}"
+    # ✅ KESİN ÇÖZÜM: ilçe/tarih değişince widget state'lerini güncelle + rerun
+    reg_ctx = f"{selected_district}|{start_date.isoformat()}"
     if st.session_state.get("last_reg_ctx") != reg_ctx:
         st.session_state["last_reg_ctx"] = reg_ctx
 
@@ -344,20 +341,19 @@ with tab1:
         st.session_state["energy_90d_key"] = float(auto_reg["energy_90d"])
         st.session_state["energy_rate_90d_key"] = float(auto_reg["energy_rate_90d"])
 
-        # widgetlar eski değeri tutmasın diye hemen rerun
         st.rerun()
 
     with c2:
         st.subheader("⚙️ Arka Plan Varsayılanları")
 
         with st.expander("Varsayılan değerleri gör / değiştir", expanded=True):
-            st.caption(f"Son 30 günde {radius_km} km içinde bulunan kayıt: **{auto_reg['_n30']}**")
+            # İstersen bu debug satırını silebilirsin:
+            st.caption(f"Son 30 günde 30 km içinde bulunan kayıt: **{auto_reg['_n30']}**")
 
             default_fault_dist = st.number_input("fault_distance (km) [auto]", key="fault_distance_key", format="%.4f")
             default_b_value = st.number_input("b_value [auto]", key="b_value_key", format="%.4f")
             default_log_energy = st.number_input("log_energy [auto]", key="log_energy_key", format="%.6f")
 
-            # Enerjiler çok büyük olabildiği için bilimsel format daha iyi
             default_e30 = st.number_input("energy_30d [auto]", key="energy_30d_key", format="%.6e")
             default_er30 = st.number_input("energy_rate_30d [auto]", key="energy_rate_30d_key", format="%.6e")
             default_e90 = st.number_input("energy_90d [auto]", key="energy_90d_key", format="%.6e")
@@ -426,16 +422,16 @@ with tab2:
         st.caption(f"Hesaplanan Hücre: **{lat_bin:.1f}, {lon_bin:.1f}**")
 
         start_date_c = st.date_input("Başlangıç Tarihi", datetime.date.today(), key="start_date_c")
-        fallback_radius_km = st.slider("Fallback radius (km)", 10, 150, 30, key="radius_clf")
 
+    # fallback radius sabit: 30km
     auto_feats = compute_roll30_features(
         quake_catalog, lat_bin, lon_bin, start_date_c,
         center_lat=c_lat, center_lon=c_lon,
-        fallback_radius_km=float(fallback_radius_km)
+        fallback_radius_km=30.0
     )
 
-    # ✅ KESİN ÇÖZÜM: ctx değişince state yaz + rerun
-    ctx = f"{selected_district_c}|{start_date_c.isoformat()}|{lat_bin:.1f}|{lon_bin:.1f}|{int(fallback_radius_km)}"
+    # ✅ ctx değişince state yaz + rerun
+    ctx = f"{selected_district_c}|{start_date_c.isoformat()}|{lat_bin:.1f}|{lon_bin:.1f}"
     if st.session_state.get("last_roll30_ctx") != ctx:
         st.session_state["last_roll30_ctx"] = ctx
         st.session_state["roll30_count_key"] = float(auto_feats["roll30_count"])
@@ -472,7 +468,7 @@ with tab2:
             feats_d = compute_roll30_features(
                 quake_catalog, lat_bin, lon_bin, d,
                 center_lat=c_lat, center_lon=c_lon,
-                fallback_radius_km=float(fallback_radius_km)
+                fallback_radius_km=30.0
             )
 
             rows.append({
