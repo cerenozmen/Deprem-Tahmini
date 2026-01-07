@@ -139,6 +139,12 @@ def week_dates(start_date: datetime.date, days: int = 7):
 def mag_to_energy(m: float) -> float:
     return float(10 ** (1.5 * m + 4.8))
 
+# Not: Enerji/log-enerji değişkenlerinde kullanılan log tabanı eğitimle aynı olmalı.
+# Eğer model eğitiminde log10 kullanıldıysa burada np.log/np.log1p (doğal log)
+# kullanmak çıktının "sabit" bir değere çökmesine neden olabilir.
+def safe_log10(x: float, eps: float = 1e-12) -> float:
+    return float(np.log10(max(float(x), eps)))
+
 def haversine_km(lat1, lon1, lat2, lon2) -> float:
     R = 6371.0
     p1, p2 = math.radians(lat1), math.radians(lat2)
@@ -190,7 +196,11 @@ def compute_reg_features_from_dataset(quake_df: pd.DataFrame, center_lat: float,
     er90 = float(e90 / 90.0)
 
     bval = b_value_mle(mags30, mmin=0.0)
-    log_energy = float(np.log1p(e30))
+
+    # ⚠️ ÖNEMLİ: Model eğitiminde genelde log10 kullanılır.
+    # Doğal log (np.log/np.log1p) kullanıldıysa değerler ölçek olarak büyür
+    # ve ağaç tabanlı modeller (RF) farklı dallara düşmeyip çıktıyı sabitleyebilir.
+    log_energy = safe_log10(e30 + 1.0)
 
     return {
         "fault_distance": fault_distance_km(center_lat, center_lon),
@@ -378,10 +388,11 @@ with tab1:
                 "energy_90d": float(default_e90),
                 "energy_rate_90d": float(default_er90),
 
-                "log_energy_30d": float(np.log1p(default_e30)),
-                "log_energy_90d": float(np.log1p(default_e90)),
-                "log_energy_rate_30d": float(np.log1p(default_er30)),
-                "log_energy_rate_90d": float(np.log1p(default_er90)),
+                # Model eğitiminde bu türev log feature'lar varsa genelde log10 kullanılır.
+                "log_energy_30d": safe_log10(default_e30 + 1.0),
+                "log_energy_90d": safe_log10(default_e90 + 1.0),
+                "log_energy_rate_30d": safe_log10(default_er30 + 1.0),
+                "log_energy_rate_90d": safe_log10(default_er90 + 1.0),
 
                 "month": df_date["month"],
                 "dow": df_date["dow"],
