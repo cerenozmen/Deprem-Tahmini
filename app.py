@@ -83,25 +83,8 @@ district_df = pd.DataFrame(
 ).sort_values("ilce_adi").reset_index(drop=True)
 
 # =========================
-# İlçe Bazlı Varsayılanlar (Tab1)
+# İlçe Bazlı Varsayılanlar (TAB1)
 # =========================
-# Örnek mantık: Marmara fayına yakın ilçelerde fault_distance düşük,
-# b_value ve enerji değerleri farklı olsun.
-DISTRICT_DEFAULTS = {
-    # Marmara kıyısına yakın örnekler
-    "Avcılar":        {"fault_distance": 3.0, "b_value": 0.95, "log_energy": 9.2, "energy_30d": 16000, "energy_rate_30d": 160, "energy_90d": 70000, "energy_rate_90d": 110},
-    "Bakırköy":       {"fault_distance": 4.0, "b_value": 0.98, "log_energy": 9.1, "energy_30d": 14000, "energy_rate_30d": 140, "energy_90d": 65000, "energy_rate_90d": 105},
-    "Küçükçekmece":   {"fault_distance": 3.5, "b_value": 0.96, "log_energy": 9.15,"energy_30d": 15000, "energy_rate_30d": 150, "energy_90d": 68000, "energy_rate_90d": 108},
-    "Beylikdüzü":     {"fault_distance": 3.2, "b_value": 0.94, "log_energy": 9.25,"energy_30d": 17000, "energy_rate_30d": 170, "energy_90d": 72000, "energy_rate_90d": 112},
-    "Silivri":        {"fault_distance": 2.5, "b_value": 0.92, "log_energy": 9.35,"energy_30d": 20000, "energy_rate_30d": 200, "energy_90d": 80000, "energy_rate_90d": 120},
-    "Adalar":         {"fault_distance": 3.0, "b_value": 0.93, "log_energy": 9.30,"energy_30d": 18000, "energy_rate_30d": 180, "energy_90d": 76000, "energy_rate_90d": 115},
-
-    # İç kesim örnekleri
-    "Başakşehir":     {"fault_distance": 8.0, "b_value": 1.05, "log_energy": 8.9, "energy_30d": 9000,  "energy_rate_30d": 90,  "energy_90d": 42000, "energy_rate_90d": 95},
-    "Arnavutköy":     {"fault_distance": 9.0, "b_value": 1.06, "log_energy": 8.85,"energy_30d": 8000,  "energy_rate_30d": 80,  "energy_90d": 40000, "energy_rate_90d": 90},
-    "Çatalca":        {"fault_distance": 10.0,"b_value": 1.07, "log_energy": 8.8, "energy_30d": 7500,  "energy_rate_30d": 75,  "energy_90d": 38000, "energy_rate_90d": 85},
-}
-
 GLOBAL_DEFAULTS = {
     "fault_distance": 5.0,
     "b_value": 1.0,
@@ -110,6 +93,16 @@ GLOBAL_DEFAULTS = {
     "energy_rate_30d": 100.0,
     "energy_90d": 50000.0,
     "energy_rate_90d": 100.0,
+}
+
+# ÖRNEK: bazı ilçeleri farklılaştırdım. Diğerleri GLOBAL_DEFAULTS ile gelir.
+DISTRICT_DEFAULTS = {
+    "Avcılar":      {"fault_distance": 3.0, "b_value": 0.95, "log_energy": 9.2,  "energy_30d": 16000, "energy_rate_30d": 160, "energy_90d": 70000, "energy_rate_90d": 110},
+    "Bakırköy":     {"fault_distance": 4.0, "b_value": 0.98, "log_energy": 9.1,  "energy_30d": 14000, "energy_rate_30d": 140, "energy_90d": 65000, "energy_rate_90d": 105},
+    "Küçükçekmece": {"fault_distance": 3.5, "b_value": 0.96, "log_energy": 9.15, "energy_30d": 15000, "energy_rate_30d": 150, "energy_90d": 68000, "energy_rate_90d": 108},
+    "Beylikdüzü":   {"fault_distance": 3.2, "b_value": 0.94, "log_energy": 9.25, "energy_30d": 17000, "energy_rate_30d": 170, "energy_90d": 72000, "energy_rate_90d": 112},
+    "Silivri":      {"fault_distance": 2.5, "b_value": 0.92, "log_energy": 9.35, "energy_30d": 20000, "energy_rate_30d": 200, "energy_90d": 80000, "energy_rate_90d": 120},
+    "Başakşehir":   {"fault_distance": 8.0, "b_value": 1.05, "log_energy": 8.9,  "energy_30d": 9000,  "energy_rate_30d": 90,  "energy_90d": 42000, "energy_rate_90d": 95},
 }
 
 def get_district_defaults(district_name: str) -> dict:
@@ -128,17 +121,12 @@ QUAKES = [
     {"time": "2025-12-22 21:18:45", "lat": 40.99, "lon": 28.90, "mag": 3.0, "depth_km": 10.0},
     {"time": "2025-12-28 06:55:10", "lat": 41.02, "lon": 28.94, "mag": 2.9, "depth_km": 8.0},
     {"time": "2026-01-03 00:11:02", "lat": 41.04, "lon": 28.86, "mag": 3.2, "depth_km": 12.0},
-    {"time": "2025-12-09 02:10:00", "lat": 41.02, "lon": 28.95, "mag": 2.6, "depth_km": 9.0},
-    {"time": "2025-12-16 18:22:00", "lat": 41.04, "lon": 28.99, "mag": 3.0, "depth_km": 8.5},
-    {"time": "2025-12-24 11:05:40", "lat": 41.06, "lon": 28.99, "mag": 2.5, "depth_km": 7.0},
-    {"time": "2026-01-01 04:30:00", "lat": 41.04, "lon": 29.01, "mag": 2.9, "depth_km": 10.2},
+
     {"time": "2025-12-14 07:15:00", "lat": 40.99, "lon": 29.03, "mag": 2.8, "depth_km": 9.5},
     {"time": "2025-12-19 23:50:00", "lat": 41.02, "lon": 29.03, "mag": 3.1, "depth_km": 11.0},
     {"time": "2025-12-26 16:10:00", "lat": 40.94, "lon": 29.16, "mag": 3.3, "depth_km": 13.0},
     {"time": "2025-12-30 10:45:00", "lat": 40.90, "lon": 29.19, "mag": 3.0, "depth_km": 10.0},
     {"time": "2026-01-04 09:10:00", "lat": 40.88, "lon": 29.24, "mag": 2.7, "depth_km": 8.0},
-    {"time": "2025-12-15 12:00:00", "lat": 41.16, "lon": 29.05, "mag": 2.4, "depth_km": 6.0},
-    {"time": "2025-12-27 08:20:00", "lat": 41.13, "lon": 29.10, "mag": 2.9, "depth_km": 7.0},
 ]
 
 @st.cache_data
@@ -158,8 +146,14 @@ def load_quake_catalog_from_code(quakes: list[dict]) -> pd.DataFrame:
 quake_catalog = load_quake_catalog_from_code(QUAKES)
 
 # =========================
-# Yardımcılar (Tab2 için)
+# Yardımcılar
 # =========================
+def derive_date_features(d: datetime.date):
+    return {"month": d.month, "dow": d.weekday(), "dayofyear": d.timetuple().tm_yday}
+
+def week_dates(start_date: datetime.date, days: int = 7):
+    return [start_date + datetime.timedelta(days=i) for i in range(days)]
+
 def mag_to_energy(m: float) -> float:
     return float(10 ** (1.5 * m + 4.8))
 
@@ -186,7 +180,6 @@ def summarize_roll30(sub: pd.DataFrame):
     maxmag = float(sub["mag"].max())
     meanmag = float(sub["mag"].mean())
     meandepth = float(sub["depth_km"].dropna().mean()) if sub["depth_km"].notna().any() else 0.0
-
     energies = sub["mag"].apply(mag_to_energy).astype(float)
     e30 = float(energies.sum())
     er30 = float(e30 / 30.0)
@@ -200,20 +193,21 @@ def summarize_roll30(sub: pd.DataFrame):
         "roll30_energy_rate_30d": er30,
     }
 
-def compute_roll30_features(quake_df, lat_bin, lon_bin, as_of_date, center_lat, center_lon, fallback_radius_km=30.0):
+def compute_roll30_features(quake_df: pd.DataFrame, lat_bin: float, lon_bin: float, as_of_date: datetime.date,
+                            center_lat: float, center_lon: float, fallback_radius_km: float = 30.0):
     start_dt = datetime.datetime.combine(as_of_date - datetime.timedelta(days=30), datetime.time.min)
     end_dt = datetime.datetime.combine(as_of_date, datetime.time.min)
-
     dfw = quake_df[(quake_df["time"] >= start_dt) & (quake_df["time"] < end_dt)].copy()
 
-    lat0, lon0 = lat_bin, lon_bin
+    # 1) aynı hücre
     sub = dfw[
-        (dfw["lat"] >= lat0) & (dfw["lat"] < lat0 + 0.1) &
-        (dfw["lon"] >= lon0) & (dfw["lon"] < lon0 + 0.1)
+        (dfw["lat"] >= lat_bin) & (dfw["lat"] < lat_bin + 0.1) &
+        (dfw["lon"] >= lon_bin) & (dfw["lon"] < lon_bin + 0.1)
     ].copy()
     if len(sub) > 0:
         feats = summarize_roll30(sub); feats["_source"] = "cell"; return feats
 
+    # 2) komşu hücreler
     for dlat in [-0.1, 0.0, 0.1]:
         for dlon in [-0.1, 0.0, 0.1]:
             if dlat == 0.0 and dlon == 0.0:
@@ -227,19 +221,29 @@ def compute_roll30_features(quake_df, lat_bin, lon_bin, as_of_date, center_lat, 
             if len(s2) > 0:
                 feats = summarize_roll30(s2); feats["_source"] = "neighbor_cell"; return feats
 
-    dfw["_dist_km"] = dfw.apply(lambda r: haversine_km(center_lat, center_lon, float(r["lat"]), float(r["lon"])), axis=1)
+    # 3) radius fallback
+    dfw["_dist_km"] = dfw.apply(
+        lambda r: haversine_km(center_lat, center_lon, float(r["lat"]), float(r["lon"])),
+        axis=1
+    )
     s3 = dfw[dfw["_dist_km"] <= fallback_radius_km].copy()
     feats = summarize_roll30(s3); feats["_source"] = "radius"; return feats
 
-def derive_date_features(d: datetime.date):
-    return {"month": d.month, "dow": d.weekday(), "dayofyear": d.timetuple().tm_yday}
-
-def week_dates(start_date: datetime.date, days: int = 7):
-    return [start_date + datetime.timedelta(days=i) for i in range(days)]
-
 # =========================
-# TAB 1
+# Arayüz
 # =========================
+st.title("🌍 İstanbul Deprem Analiz ve Tahmin Paneli")
+st.markdown("Bu uygulama, makine öğrenmesi modelleri ile tahmin ve risk analizi yapar.")
+
+# ✅ TABLAR (NameError buradan geliyordu)
+tab1, tab2 = st.tabs([
+    "📉 1 Haftalık Büyüklük Tahmini (Regresyon)",
+    "⚠️ 1 Haftalık Bölgesel Risk (Sınıflandırma)"
+])
+
+# =========================================================
+# TAB 1: REGRESYON
+# =========================================================
 with tab1:
     st.header("İlçe Bazlı 1 Haftalık Büyüklük Tahmini")
     if rf_reg is None:
@@ -254,13 +258,15 @@ with tab1:
         input_lon = float(row["lon"])
         st.caption(f"Seçilen ilçe merkez koordinatı: **{input_lat:.5f}, {input_lon:.5f}**")
 
-        default_depth_km = 10.0  # UI'dan kaldırıldı
+        # Derinlik UI'dan kaldırıldı (arkada sabit)
+        default_depth_km = 10.0
+
         start_date = st.date_input("Başlangıç Tarihi", datetime.date.today(), key="start_date_reg")
 
-    # İlçeye göre otomatik defaultları al
+    # İlçe bazlı otomatik değerler
     auto_reg = get_district_defaults(selected_district)
 
-    # İlçe değişince state'e yaz ki UI güncellensin
+    # İlçe değişince Tab1 state güncelle (UI otomatik değişsin)
     reg_ctx = f"{selected_district}"
     if st.session_state.get("last_reg_ctx") != reg_ctx:
         st.session_state["last_reg_ctx"] = reg_ctx
@@ -328,9 +334,9 @@ with tab1:
         except Exception as e:
             st.error(f"Tahmin hatası: {e}")
 
-# =========================
-# TAB 2
-# =========================
+# =========================================================
+# TAB 2: SINIFLANDIRMA
+# =========================================================
 with tab2:
     st.header("İlçe Bazlı 1 Haftalık Deprem Olasılığı (M ≥ 3.0)")
     if rf_clf is None:
@@ -356,10 +362,17 @@ with tab2:
         fallback_radius_km=30.0
     )
 
-    defv = {"roll30_count": 5.0, "roll30_maxmag": 3.5, "roll30_meanmag": 2.5, "roll30_depth": 10.0,
-            "roll30_energy_30d": 1000.0, "roll30_energy_rate_30d": 10.0}
+    defv = {
+        "roll30_count": 5.0,
+        "roll30_maxmag": 3.5,
+        "roll30_meanmag": 2.5,
+        "roll30_depth": 10.0,
+        "roll30_energy_30d": 1000.0,
+        "roll30_energy_rate_30d": 10.0
+    }
     defv.update(auto_feats)
 
+    # İlçe/tarih değişince Tab2 state güncelle (UI otomatik değişsin)
     ctx = f"{selected_district_c}|{start_date_c.isoformat()}|{lat_bin:.1f}|{lon_bin:.1f}"
     if st.session_state.get("last_roll30_ctx") != ctx:
         st.session_state["last_roll30_ctx"] = ctx
@@ -384,9 +397,15 @@ with tab2:
     if st.button("1 Haftalık Risk Hesapla", type="primary", key="btn_clf"):
         dates = week_dates(start_date_c, 7)
         rows = []
+
         for d in dates:
             df_date = derive_date_features(d)
-            feats_d = compute_roll30_features(quake_catalog, lat_bin, lon_bin, d, c_lat, c_lon, 30.0)
+            feats_d = compute_roll30_features(
+                quake_catalog, lat_bin, lon_bin, d,
+                center_lat=c_lat, center_lon=c_lon,
+                fallback_radius_km=30.0
+            )
+
             rows.append({
                 "date": d,
                 "lat_bin": float(lat_bin),
