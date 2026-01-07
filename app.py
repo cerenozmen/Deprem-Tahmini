@@ -83,93 +83,11 @@ district_df = pd.DataFrame(
 ).sort_values("ilce_adi").reset_index(drop=True)
 
 # =========================
-# Deprem Kataloğu: CSV YÜKLEME (QUAKES KALDIRILDI)
+# Deprem Kataloğu (MANUEL VERİLER KALDIRILDI)
 # =========================
-def _normalize_columns(df: pd.DataFrame) -> pd.DataFrame:
-    # Yaygın kolon adlarını otomatik yakalama
-    colmap = {}
-
-    def find_col(candidates):
-        for c in df.columns:
-            cl = str(c).strip().lower()
-            for cand in candidates:
-                if cl == cand or cand in cl:
-                    return c
-        return None
-
-    time_col = find_col(["time", "date", "datetime", "timestamp", "origin_time", "event_time"])
-    lat_col = find_col(["lat", "latitude", "enlem"])
-    lon_col = find_col(["lon", "lng", "longitude", "boylam"])
-    mag_col = find_col(["mag", "magnitude", "ml", "mw", "md", "buyukluk"])
-    dep_col = find_col(["depth", "depth_km", "derinlik", "depth(km)", "depthkm"])
-
-    if time_col: colmap[time_col] = "time"
-    if lat_col: colmap[lat_col] = "lat"
-    if lon_col: colmap[lon_col] = "lon"
-    if mag_col: colmap[mag_col] = "mag"
-    if dep_col: colmap[dep_col] = "depth_km"
-
-    df = df.rename(columns=colmap).copy()
-
-    # En azından time/lat/lon/mag olmalı
-    needed = ["time", "lat", "lon", "mag"]
-    missing = [c for c in needed if c not in df.columns]
-    if missing:
-        raise ValueError(f"CSV içinde zorunlu kolon(lar) bulunamadı: {missing}. "
-                         f"Beklenen: time, lat, lon, mag (depth_km opsiyonel).")
-
-    if "depth_km" not in df.columns:
-        df["depth_km"] = np.nan
-
-    # Tip dönüşümleri
-    df["time"] = pd.to_datetime(df["time"], errors="coerce")
-    df["lat"] = pd.to_numeric(df["lat"], errors="coerce")
-    df["lon"] = pd.to_numeric(df["lon"], errors="coerce")
-    df["mag"] = pd.to_numeric(df["mag"], errors="coerce")
-    df["depth_km"] = pd.to_numeric(df["depth_km"], errors="coerce")
-
-    df = df.dropna(subset=["time", "lat", "lon", "mag"]).copy()
-    return df[["time", "lat", "lon", "mag", "depth_km"]].sort_values("time").reset_index(drop=True)
-
-@st.cache_data
-def load_quake_catalog_from_csv(file_bytes: bytes, filename: str) -> pd.DataFrame:
-    # CSV oku
-    # Bazı dosyalar ; ile gelebiliyor -> engine python ile ayırıcıyı dene
-    try:
-        df = pd.read_csv(pd.io.common.BytesIO(file_bytes))
-    except Exception:
-        df = pd.read_csv(pd.io.common.BytesIO(file_bytes), sep=";", engine="python")
-
-    df = _normalize_columns(df)
-    return df
-
-# Sol menü: katalog yükleme
-st.sidebar.header("📥 Deprem Kataloğu")
-st.sidebar.caption("CSV yükleyin (zorunlu: time, lat, lon, mag | opsiyonel: depth_km).")
-
-template = "time,lat,lon,mag,depth_km\n2026-01-01 12:00:00,40.99,28.90,3.1,10\n"
-st.sidebar.download_button(
-    "Örnek CSV şablonu indir",
-    data=template.encode("utf-8"),
-    file_name="quake_template.csv",
-    mime="text/csv"
-)
-
-uploaded = st.sidebar.file_uploader("Katalog CSV yükle", type=["csv"])
-
-if uploaded is None:
-    quake_catalog = pd.DataFrame(columns=["time", "lat", "lon", "mag", "depth_km"])
-    st.sidebar.warning("Katalog yüklenmedi. Tahminler benzer/sabit çıkabilir.")
-else:
-    try:
-        quake_catalog = load_quake_catalog_from_csv(uploaded.getvalue(), uploaded.name)
-        st.sidebar.success(f"Katalog yüklendi ✅  Kayıt: {len(quake_catalog)}")
-        st.sidebar.write(
-            f"Tarih aralığı: {quake_catalog['time'].min()} → {quake_catalog['time'].max()}"
-        )
-    except Exception as e:
-        quake_catalog = pd.DataFrame(columns=["time", "lat", "lon", "mag", "depth_km"])
-        st.sidebar.error(f"CSV okunamadı: {e}")
+# QUAKES listesi tamamen kaldırıldı.
+# Katalog şimdilik boş tutuluyor. İstersen burayı CSV/API ile doldurabilirsin.
+quake_catalog = pd.DataFrame(columns=["time", "lat", "lon", "mag", "depth_km"])
 
 # =========================
 # Fay hattı (KOD İÇİNDE) - örnek
@@ -216,22 +134,34 @@ def b_value_mle(mags: np.ndarray, mmin: float = 0.0) -> float:
         return 1.0
     return float(np.log10(np.e) / denom)
 
-def window_events(df: pd.DataFrame, center_lat: float, center_lon: float,
-                  start_dt: datetime.datetime, end_dt: datetime.datetime,
-                  radius_km: float = 30.0) -> pd.DataFrame:
+def window_events(
+    df: pd.DataFrame,
+    center_lat: float,
+    center_lon: float,
+    start_dt: datetime.datetime,
+    end_dt: datetime.datetime,
+    radius_km: float = 30.0
+) -> pd.DataFrame:
     if df is None or df.empty:
         return pd.DataFrame(columns=["time", "lat", "lon", "mag", "depth_km"])
+
     sub = df[(df["time"] >= start_dt) & (df["time"] < end_dt)].copy()
     if len(sub) == 0:
         return sub
+
     sub["_dist_km"] = sub.apply(
         lambda r: haversine_km(center_lat, center_lon, float(r["lat"]), float(r["lon"])),
         axis=1
     )
     return sub[sub["_dist_km"] <= radius_km].copy()
 
-def compute_reg_features_from_dataset(quake_df: pd.DataFrame, center_lat: float, center_lon: float,
-                                      as_of_date: datetime.date, radius_km: float = 30.0) -> dict:
+def compute_reg_features_from_dataset(
+    quake_df: pd.DataFrame,
+    center_lat: float,
+    center_lon: float,
+    as_of_date: datetime.date,
+    radius_km: float = 30.0
+) -> dict:
     day0 = datetime.datetime.combine(as_of_date, datetime.time.min)
 
     s30 = day0 - datetime.timedelta(days=30)
@@ -287,6 +217,7 @@ def summarize_roll30(sub: pd.DataFrame):
         "roll30_energy_rate_30d": er30,
     }
 
+# ✅ komşu hücrelerde "ilk bulduğunu" değil, merkeze en yakın olanı seçiyor
 def compute_roll30_features(
     quake_df: pd.DataFrame,
     lat_bin: float,
@@ -384,8 +315,10 @@ with tab1:
         default_depth_km = 10.0  # UI'dan kaldırıldı
         start_date = st.date_input("Başlangıç Tarihi", datetime.date.today(), key="start_date_reg")
 
+    # İlçeye göre (katalogdan) otomatik hesap
     auto_reg = compute_reg_features_from_dataset(quake_catalog, input_lat, input_lon, start_date, radius_km=30.0)
 
+    # İlçe/tarih değişince UI değerlerini otomatik güncelle
     reg_ctx = f"{selected_district}|{start_date.isoformat()}"
     if st.session_state.get("last_reg_ctx") != reg_ctx:
         st.session_state["last_reg_ctx"] = reg_ctx
@@ -476,6 +409,7 @@ with tab2:
         fallback_radius_km=30.0
     )
 
+    # İlçe/tarih değişince UI state'e yaz (UI 0 kalmasın)
     ctx = f"{selected_district_c}|{start_date_c.isoformat()}|{lat_bin:.1f}|{lon_bin:.1f}"
     if st.session_state.get("last_roll30_ctx") != ctx:
         st.session_state["last_roll30_ctx"] = ctx
@@ -489,6 +423,9 @@ with tab2:
         roll30_maxmag = st.number_input("Son 30 gündeki maks. büyüklük", key="roll30_maxmag_key")
         roll30_meanmag = st.number_input("Son 30 gündeki ort. büyüklük", key="roll30_meanmag_key")
         roll30_depth = st.number_input("Son 30 gündeki ort. derinlik", key="roll30_depth_key")
+
+        roll30_energy = float(auto_feats.get("roll30_energy_30d", 0.0))
+        roll30_energy_rate = float(auto_feats.get("roll30_energy_rate_30d", 0.0))
 
         src = auto_feats.get("_source", "cell")
         src_map = {
