@@ -83,56 +83,39 @@ district_df = pd.DataFrame(
 ).sort_values("ilce_adi").reset_index(drop=True)
 
 # =========================
-# GERÇEK KATALOG YÜKLEME (CSV)
+# Deprem Kataloğu (KOD İÇİNDE)
 # =========================
+QUAKES = [
+    {"time": "2025-12-10 03:12:10", "lat": 40.98, "lon": 28.72, "mag": 3.1, "depth_km": 9.8},
+    {"time": "2025-12-11 06:40:00", "lat": 41.00, "lon": 28.65, "mag": 2.8, "depth_km": 12.0},
+    {"time": "2025-12-13 14:05:00", "lat": 40.99, "lon": 28.88, "mag": 2.7, "depth_km": 11.2},
+    {"time": "2025-12-18 09:41:22", "lat": 41.00, "lon": 28.79, "mag": 3.4, "depth_km": 7.5},
+    {"time": "2025-12-22 21:18:45", "lat": 40.99, "lon": 28.90, "mag": 3.0, "depth_km": 10.0},
+    {"time": "2025-12-28 06:55:10", "lat": 41.02, "lon": 28.94, "mag": 2.9, "depth_km": 8.0},
+    {"time": "2026-01-03 00:11:02", "lat": 41.04, "lon": 28.86, "mag": 3.2, "depth_km": 12.0},
+
+    {"time": "2025-12-14 07:15:00", "lat": 40.99, "lon": 29.03, "mag": 2.8, "depth_km": 9.5},
+    {"time": "2025-12-19 23:50:00", "lat": 41.02, "lon": 29.03, "mag": 3.1, "depth_km": 11.0},
+    {"time": "2025-12-26 16:10:00", "lat": 40.94, "lon": 29.16, "mag": 3.3, "depth_km": 13.0},
+    {"time": "2025-12-30 10:45:00", "lat": 40.90, "lon": 29.19, "mag": 3.0, "depth_km": 10.0},
+    {"time": "2026-01-04 09:10:00", "lat": 40.88, "lon": 29.24, "mag": 2.7, "depth_km": 8.0},
+]
+
 @st.cache_data
-def load_quake_catalog_from_csv(uploaded_file) -> pd.DataFrame:
-    df = pd.read_csv(uploaded_file)
-
-    # Kolon kontrolü
-    required = {"time", "lat", "lon", "mag"}
-    missing = required - set(df.columns)
-    if missing:
-        raise ValueError(f"CSV içinde eksik kolon(lar): {sorted(list(missing))}. Gerekli: {sorted(list(required))}")
-
-    df = df.copy()
+def load_quake_catalog_from_code(quakes: list[dict]) -> pd.DataFrame:
+    df = pd.DataFrame(quakes).copy()
     df["time"] = pd.to_datetime(df["time"], errors="coerce")
     df = df.dropna(subset=["time", "lat", "lon", "mag"]).copy()
-
-    df["lat"] = pd.to_numeric(df["lat"], errors="coerce")
-    df["lon"] = pd.to_numeric(df["lon"], errors="coerce")
-    df["mag"] = pd.to_numeric(df["mag"], errors="coerce")
-
+    df["lat"] = df["lat"].astype(float)
+    df["lon"] = df["lon"].astype(float)
+    df["mag"] = df["mag"].astype(float)
     if "depth_km" in df.columns:
         df["depth_km"] = pd.to_numeric(df["depth_km"], errors="coerce")
     else:
         df["depth_km"] = np.nan
-
-    df = df.dropna(subset=["lat", "lon", "mag"]).copy()
     return df
 
-st.title("🌍 İstanbul Deprem Analiz ve Tahmin Paneli")
-st.markdown("Bu uygulama, makine öğrenmesi modelleri ile tahmin ve risk analizi yapar.")
-st.markdown("**Not:** Sahte veri yok. Devam etmek için lütfen deprem kataloğu CSV yükleyin.")
-
-uploaded = st.file_uploader(
-    "Deprem kataloğu CSV yükle (kolonlar: time, lat, lon, mag, opsiyonel: depth_km)",
-    type=["csv"]
-)
-
-if uploaded is None:
-    st.warning("CSV yüklemeden uygulama çalışmaz (sahte veri kullanılmıyor).")
-    st.stop()
-
-try:
-    quake_catalog = load_quake_catalog_from_csv(uploaded)
-except Exception as e:
-    st.error(f"Katalog yükleme hatası: {e}")
-    st.stop()
-
-st.success(f"Katalog yüklendi ✅ Kayıt sayısı: {len(quake_catalog)}")
-with st.expander("İlk 10 kayıt"):
-    st.dataframe(quake_catalog.sort_values("time").head(10), use_container_width=True)
+quake_catalog = load_quake_catalog_from_code(QUAKES)
 
 # =========================
 # Fay hattı (KOD İÇİNDE) - örnek
@@ -309,6 +292,12 @@ def compute_roll30_features(
     feats["_source"] = "radius"
     return feats
 
+# =========================
+# Arayüz
+# =========================
+st.title("🌍 İstanbul Deprem Analiz ve Tahmin Paneli")
+st.markdown("Bu uygulama, makine öğrenmesi modelleri ile tahmin ve risk analizi yapar.")
+
 tab1, tab2 = st.tabs([
     "📉 1 Haftalık Büyüklük Tahmini (Regresyon)",
     "⚠️ 1 Haftalık Bölgesel Risk (Sınıflandırma)"
@@ -331,13 +320,15 @@ with tab1:
         input_lon = float(row["lon"])
         st.caption(f"Seçilen ilçe merkez koordinatı: **{input_lat:.5f}, {input_lon:.5f}**")
 
-        default_depth_km = 10.0
+        default_depth_km = 10.0  # UI'dan kaldırıldı
         start_date = st.date_input("Başlangıç Tarihi", datetime.date.today(), key="start_date_reg")
 
+    # radius sabit: 30km
     auto_reg = compute_reg_features_from_dataset(
         quake_catalog, input_lat, input_lon, start_date, radius_km=30.0
     )
 
+    # ✅ KESİN ÇÖZÜM: ilçe/tarih değişince widget state'lerini güncelle + rerun
     reg_ctx = f"{selected_district}|{start_date.isoformat()}"
     if st.session_state.get("last_reg_ctx") != reg_ctx:
         st.session_state["last_reg_ctx"] = reg_ctx
@@ -354,7 +345,9 @@ with tab1:
 
     with c2:
         st.subheader("⚙️ Arka Plan Varsayılanları")
+
         with st.expander("Varsayılan değerleri gör / değiştir", expanded=True):
+            # İstersen bu debug satırını silebilirsin:
             st.caption(f"Son 30 günde 30 km içinde bulunan kayıt: **{auto_reg['_n30']}**")
 
             default_fault_dist = st.number_input("fault_distance (km) [auto]", key="fault_distance_key", format="%.4f")
@@ -430,12 +423,14 @@ with tab2:
 
         start_date_c = st.date_input("Başlangıç Tarihi", datetime.date.today(), key="start_date_c")
 
+    # fallback radius sabit: 30km
     auto_feats = compute_roll30_features(
         quake_catalog, lat_bin, lon_bin, start_date_c,
         center_lat=c_lat, center_lon=c_lon,
         fallback_radius_km=30.0
     )
 
+    # ✅ ctx değişince state yaz + rerun
     ctx = f"{selected_district_c}|{start_date_c.isoformat()}|{lat_bin:.1f}|{lon_bin:.1f}"
     if st.session_state.get("last_roll30_ctx") != ctx:
         st.session_state["last_roll30_ctx"] = ctx
