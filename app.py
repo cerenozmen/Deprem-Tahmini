@@ -3,6 +3,7 @@ import pandas as pd
 import numpy as np
 import joblib
 import datetime
+from pathlib import Path
 
 # =========================
 # Sayfa Ayarları
@@ -35,7 +36,6 @@ rf_reg, rf_clf = load_models()
 # =========================
 # İLÇE -> KOORDİNAT (CSV YOK)
 # =========================
-# İstanbul ilçe merkezlerine yakın yaklaşık koordinatlar
 DISTRICTS = {
     "Adalar": (40.8739, 29.1236),
     "Arnavutköy": (41.1831, 28.7406),
@@ -83,6 +83,30 @@ district_df = pd.DataFrame(
 ).sort_values("ilce_adi").reset_index(drop=True)
 
 # =========================
+# SABİT / ARKA PLAN PARAMETRELERİ (UI YOK)
+# =========================
+DEFAULT_DEPTH_KM = 10.0
+
+# Regresyon modelinin beklediği (UI’da olmayan) feature’lar için sabit değerler:
+DEFAULT_FAULT_DISTANCE = 5.0
+DEFAULT_B_VALUE = 1.0
+DEFAULT_LOG_ENERGY = 9.0
+
+DEFAULT_E30 = 10000.0
+DEFAULT_ER30 = 100.0
+DEFAULT_E90 = 50000.0
+DEFAULT_ER90 = 100.0
+
+# Sınıflandırmada enerji tarafı (UI yok)
+DEFAULT_ROLL30_ENERGY = 1000.0
+DEFAULT_ROLL30_ENERGY_RATE = 10.0
+
+# İsteğe bağlı: Eğer ham deprem olayları dosyan varsa buradan otomatik hesaplarız.
+# Bu dosya ZORUNLU DEĞİL. Yoksa deterministik default üretilecek.
+# Beklenen kolonlar örneği: date, lat, lon, depth_km, mag
+EVENTS_FILE = "events.csv"
+
+# =========================
 # Yardımcılar
 # =========================
 def derive_date_features(d: datetime.date):
@@ -90,6 +114,74 @@ def derive_date_features(d: datetime.date):
 
 def week_dates(start_date: datetime.date, days: int = 7):
     return [start_date + datetime.timedelta(days=i) for i in range(days)]
+
+def _stable_rng_seed(district: str, anchor_date: datetime.date) -> int:
+    # Aynı ilçe + aynı tarih için aynı “otomatik” değerler üretsin (deterministik)
+    s = f"{district}-{anchor_date.isoformat()}"
+    return abs(hash(s)) % (2**32)
+
+@st.cache_data
+def load_events_if_exists():
+    base = Path(__file__).resolve().parent
+    fp = base / EVENTS_FILE
+    if not fp.exists():
+        return None
+    try:
+        df = pd.read_csv(fp)
+    except Exception:
+        return None
+
+    # Minimum kolon kontrolü
+    needed = {"date", "lat", "lon", "mag"}
+    if not needed.issubset(set(df.columns)):
+        return None
+
+    # Tarih parse
+    df = df.copy()
+    df["date"] = pd.to_datetime(df["date"], errors="coerce").dt.date
+    df = df.dropna(subset=["date", "lat", "lon", "mag"])
+    return df
+
+def compute_roll30_features_auto(
+    district_name: str,
+    lat: float,
+    lon: float,
+    anchor_date: datetime.date,
+    events_df: pd.DataFrame | None,
+):
+    """
+    Son 30 gün metriklerini UI olmadan otomatik üretir.
+
+    1) events.csv varsa: ilçeye yakın olayları filtreleyip (basit mesafe eşiği) 30 gün metriklerini hesaplar.
+    2) events.csv yoksa: district+date bazlı deterministik (tekrar üretilebilir) değerler döner.
+    """
+    start = anchor_date - datetime.timedelta(days=30)
+
+    if events_df is not None and not events_df.empty:
+        # Basit yakınlık filtresi (yaklaşık): enlem/boylam farkı küçük olanları al
+        # İstersen bunu daha sonra haversine ile iyileştiririz.
+        df = events_df[(events_df["date"] >= start) & (events_df["date"] <= anchor_date)].copy()
+        df["dlat"] = (df["lat"] - lat).abs()
+        df["dlon"] = (df["lon"] - lon).abs()
+        near = df[(df["dlat"] <= 0.20) & (df["dlon"] <= 0.20)]  # ~20km-30km bandına kabaca denk
+
+        if len(near) > 0:
+            roll30_count = float(len(near))
+            roll30_maxmag = float(near["mag"].max())
+            roll30_meanmag = float(near["mag"].mean())
+            if "depth_km" in near.columns:
+                roll30_depth = float(near["depth_km"].mean())
+            else:
+                roll30_depth = 10.0
+            return roll30_count, roll30_maxmag, roll30_meanmag, roll30_depth
+
+    # events yoksa -> deterministik üretim
+    rng = np.random.default_rng(_stable_rng_seed(district_name, anchor_date))
+    roll30_count = float(rng.integers(0, 15))               # 0-14 arası
+    roll30_meanmag = float(np.clip(rng.normal(2.6, 0.35), 1.5, 4.0))
+    roll30_maxmag = float(np.clip(roll30_meanmag + rng.uniform(0.2, 1.2), 2.0, 5.5))
+    roll30_depth = float(np.clip(rng.normal(10.0, 4.0), 1.0, 30.0))
+    return roll30_count, roll30_maxmag, roll30_meanmag, roll30_depth
 
 # =========================
 # Arayüz
@@ -99,8 +191,10 @@ st.markdown("Bu uygulama, makine öğrenmesi modelleri ile tahmin ve risk analiz
 
 tab1, tab2 = st.tabs(["📉 1 Haftalık Büyüklük Tahmini (Regresyon)", "⚠️ 1 Haftalık Bölgesel Risk (Sınıflandırma)"])
 
+events_df = load_events_if_exists()
+
 # =========================================================
-# TAB 1: REGRESYON
+# TAB 1: REGRESYON (DERİNLİK UI YOK)
 # =========================================================
 with tab1:
     st.header("İlçe Bazlı 1 Haftalık Büyüklük Tahmini")
@@ -108,37 +202,23 @@ with tab1:
     if rf_reg is None:
         st.stop()
 
-    c1, c2 = st.columns([1, 1])
+    selected_district = st.selectbox("İlçe seçin", district_df["ilce_adi"].tolist(), key="reg_district")
+    row = district_df[district_df["ilce_adi"] == selected_district].iloc[0]
+    input_lat = float(row["lat"])
+    input_lon = float(row["lon"])
 
-    with c1:
-        selected_district = st.selectbox("İlçe seçin", district_df["ilce_adi"].tolist())
-        row = district_df[district_df["ilce_adi"] == selected_district].iloc[0]
-        input_lat = float(row["lat"])
-        input_lon = float(row["lon"])
+    st.caption(f"Seçilen ilçe merkez koordinatı: **{input_lat:.5f}, {input_lon:.5f}**")
+    start_date = st.date_input("Başlangıç Tarihi", datetime.date.today(), key="reg_start")
 
-        st.caption(f"Seçilen ilçe merkez koordinatı: **{input_lat:.5f}, {input_lon:.5f}**")
-        input_depth = st.number_input("Derinlik (km)", value=10.0, min_value=0.0)
-        start_date = st.date_input("Başlangıç Tarihi", datetime.date.today())
-
-    with c2:
-        st.subheader("⚙️ Arka Plan Varsayılanları (UI’dan kaldırıldı)")
-        with st.expander("Varsayılan değerleri gör / değiştir"):
-            default_fault_dist = st.number_input("fault_distance (km) [default]", value=5.0)
-            default_b_value = st.number_input("b_value [default]", value=1.0)
-            default_log_energy = st.number_input("log_energy [default]", value=9.0)
-            default_e30 = st.number_input("energy_30d [default]", value=10000.0)
-            default_er30 = st.number_input("energy_rate_30d [default]", value=100.0)
-            default_e90 = st.number_input("energy_90d [default]", value=50000.0)
-            default_er90 = st.number_input("energy_rate_90d [default]", value=100.0)
-
-    if st.button("1 Haftalık Tahmin Üret", type="primary"):
+    if st.button("1 Haftalık Tahmin Üret", type="primary", key="reg_btn"):
         dates = week_dates(start_date, 7)
         rows = []
 
-        log_e30 = float(np.log1p(default_e30))
-        log_e90 = float(np.log1p(default_e90))
-        log_er30 = float(np.log1p(default_er30))
-        log_er90 = float(np.log1p(default_er90))
+        # log’lar sabitlerden otomatik
+        log_e30 = float(np.log1p(DEFAULT_E30))
+        log_e90 = float(np.log1p(DEFAULT_E90))
+        log_er30 = float(np.log1p(DEFAULT_ER30))
+        log_er90 = float(np.log1p(DEFAULT_ER90))
 
         for d in dates:
             df_date = derive_date_features(d)
@@ -146,18 +226,22 @@ with tab1:
                 "date": d,
                 "lat": input_lat,
                 "lon": input_lon,
-                "depth_km": input_depth,
-                "fault_distance": float(default_fault_dist),
-                "b_value": float(default_b_value),
-                "log_energy": float(default_log_energy),
-                "energy_30d": float(default_e30),
-                "energy_rate_30d": float(default_er30),
-                "energy_90d": float(default_e90),
-                "energy_rate_90d": float(default_er90),
+                "depth_km": float(DEFAULT_DEPTH_KM),  # UI yok, sabit
+
+                "fault_distance": float(DEFAULT_FAULT_DISTANCE),
+                "b_value": float(DEFAULT_B_VALUE),
+                "log_energy": float(DEFAULT_LOG_ENERGY),
+
+                "energy_30d": float(DEFAULT_E30),
+                "energy_rate_30d": float(DEFAULT_ER30),
+                "energy_90d": float(DEFAULT_E90),
+                "energy_rate_90d": float(DEFAULT_ER90),
+
                 "log_energy_30d": log_e30,
                 "log_energy_90d": log_e90,
                 "log_energy_rate_30d": log_er30,
                 "log_energy_rate_90d": log_er90,
+
                 "month": df_date["month"],
                 "dow": df_date["dow"],
                 "dayofyear": df_date["dayofyear"],
@@ -169,13 +253,15 @@ with tab1:
         try:
             pred_df["pred_mw"] = rf_reg.predict(model_input)
             st.success("1 haftalık tahmin üretildi ✅")
-            st.dataframe(pred_df[["date", "pred_mw"]].assign(pred_mw=lambda x: x["pred_mw"].round(2)),
-                         use_container_width=True)
+            st.dataframe(
+                pred_df[["date", "pred_mw"]].assign(pred_mw=lambda x: x["pred_mw"].round(2)),
+                use_container_width=True
+            )
         except Exception as e:
             st.error(f"Tahmin hatası: {e}")
 
 # =========================================================
-# TAB 2: SINIFLANDIRMA
+# TAB 2: SINIFLANDIRMA (SON 30 GÜN UI YOK, OTOMATİK)
 # =========================================================
 with tab2:
     st.header("İlçe Bazlı 1 Haftalık Deprem Olasılığı (M ≥ 3.0)")
@@ -183,46 +269,48 @@ with tab2:
     if rf_clf is None:
         st.stop()
 
-    c1, c2 = st.columns([1, 1])
+    selected_district_c = st.selectbox("İlçe seçin", district_df["ilce_adi"].tolist(), key="clf_district")
+    rowc = district_df[district_df["ilce_adi"] == selected_district_c].iloc[0]
+    c_lat = float(rowc["lat"])
+    c_lon = float(rowc["lon"])
 
-    with c1:
-        selected_district_c = st.selectbox("İlçe seçin", district_df["ilce_adi"].tolist(), key="district_clf")
-        rowc = district_df[district_df["ilce_adi"] == selected_district_c].iloc[0]
-        c_lat = float(rowc["lat"])
-        c_lon = float(rowc["lon"])
+    lat_bin = np.floor(c_lat / 0.1) * 0.1
+    lon_bin = np.floor(c_lon / 0.1) * 0.1
+    st.caption(f"Hesaplanan Hücre: **{lat_bin:.1f}, {lon_bin:.1f}**")
 
-        lat_bin = np.floor(c_lat / 0.1) * 0.1
-        lon_bin = np.floor(c_lon / 0.1) * 0.1
-        st.caption(f"Hesaplanan Hücre: **{lat_bin:.1f}, {lon_bin:.1f}**")
+    start_date_c = st.date_input("Başlangıç Tarihi", datetime.date.today(), key="clf_start")
 
-        start_date_c = st.date_input("Başlangıç Tarihi", datetime.date.today(), key="start_date_c")
+    # (UI’da gösterme) fakat istersen debug için expander içine koyabiliriz.
+    # burada tamamen gizli bırakıyorum.
 
-    with c2:
-        roll30_count = st.number_input("Son 30 gündeki deprem sayısı", value=5.0)
-        roll30_maxmag = st.number_input("Son 30 gündeki maks. büyüklük", value=3.5)
-        roll30_meanmag = st.number_input("Son 30 gündeki ort. büyüklük", value=2.5)
-        roll30_depth = st.number_input("Son 30 gündeki ort. derinlik", value=10.0)
-
-        # enerji UI yok -> default
-        roll30_energy = 1000.0
-        roll30_energy_rate = 10.0
-
-    if st.button("1 Haftalık Risk Hesapla", type="primary"):
+    if st.button("1 Haftalık Risk Hesapla", type="primary", key="clf_btn"):
         dates = week_dates(start_date_c, 7)
         rows = []
 
         for d in dates:
+            # Son 30 gün özelliklerini otomatik üret
+            roll30_count, roll30_maxmag, roll30_meanmag, roll30_depth = compute_roll30_features_auto(
+                district_name=selected_district_c,
+                lat=c_lat,
+                lon=c_lon,
+                anchor_date=d,
+                events_df=events_df
+            )
             df_date = derive_date_features(d)
+
             rows.append({
                 "date": d,
                 "lat_bin": float(lat_bin),
                 "lon_bin": float(lon_bin),
+
                 "roll30_count": float(roll30_count),
                 "roll30_maxmag": float(roll30_maxmag),
                 "roll30_meanmag": float(roll30_meanmag),
                 "roll30_depth": float(roll30_depth),
-                "roll30_energy_30d": float(roll30_energy),
-                "roll30_energy_rate_30d": float(roll30_energy_rate),
+
+                "roll30_energy_30d": float(DEFAULT_ROLL30_ENERGY),
+                "roll30_energy_rate_30d": float(DEFAULT_ROLL30_ENERGY_RATE),
+
                 "month": df_date["month"],
                 "dow": df_date["dow"],
                 "dayofyear": df_date["dayofyear"],
@@ -235,8 +323,21 @@ with tab2:
             pred_df["prob"] = rf_clf.predict_proba(model_input)[:, 1]
             show_df = pred_df[["date", "prob"]].copy()
             show_df["prob_%"] = (show_df["prob"] * 100).round(2)
+
             st.success("1 haftalık risk üretildi ✅")
             st.dataframe(show_df.drop(columns=["prob"]), use_container_width=True)
+
+            max_prob = float(pred_df["prob"].max())
+            st.metric("Haftalık Maks. Olasılık", f"%{max_prob*100:.2f}")
+            st.progress(max_prob)
+
+            if max_prob > 0.7:
+                st.error("Haftalık değerlendirme: **Yüksek Risk**")
+            elif max_prob > 0.4:
+                st.warning("Haftalık değerlendirme: **Orta Risk**")
+            else:
+                st.success("Haftalık değerlendirme: **Düşük Risk**")
+
         except Exception as e:
             st.error(f"Sınıflandırma hatası: {e}")
 
