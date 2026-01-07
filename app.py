@@ -85,7 +85,6 @@ district_df = pd.DataFrame(
 # =========================
 # Deprem Kataloğu (KOD İÇİNDE)
 # =========================
-# Buraya kendi verisetinden örnekleri eklemelisin (ne kadar çok, o kadar iyi)
 QUAKES = [
     {"time": "2025-12-10 03:12:10", "lat": 40.98, "lon": 28.72, "mag": 3.1, "depth_km": 9.8},
     {"time": "2025-12-11 06:40:00", "lat": 41.00, "lon": 28.65, "mag": 2.8, "depth_km": 12.0},
@@ -119,14 +118,13 @@ def load_quake_catalog_from_code(quakes: list[dict]) -> pd.DataFrame:
 quake_catalog = load_quake_catalog_from_code(QUAKES)
 
 # =========================
-# Fay hattı (KOD İÇİNDE) - örnek polylines
+# Fay hattı (KOD İÇİNDE) - örnek
 # =========================
-# Eğer elinde gerçek fay koordinatları varsa burayı onunla değiştir.
 FAULT_POINTS = [
-    (40.75, 28.20),  # Silivri açıkları (yaklaşık)
+    (40.75, 28.20),
     (40.75, 28.60),
     (40.78, 29.00),
-    (40.80, 29.40),  # Tuzla açıkları (yaklaşık)
+    (40.80, 29.40),
 ]
 
 # =========================
@@ -139,7 +137,6 @@ def week_dates(start_date: datetime.date, days: int = 7):
     return [start_date + datetime.timedelta(days=i) for i in range(days)]
 
 def mag_to_energy(m: float) -> float:
-    # Gutenberg–Richter enerji ilişkisi (erg): log10(E) = 1.5M + 4.8
     return float(10 ** (1.5 * m + 4.8))
 
 def haversine_km(lat1, lon1, lat2, lon2) -> float:
@@ -151,15 +148,9 @@ def haversine_km(lat1, lon1, lat2, lon2) -> float:
     return 2 * R * math.asin(math.sqrt(a))
 
 def fault_distance_km(lat: float, lon: float) -> float:
-    # En yakın fay noktasına mesafe (basit yaklaşım)
     return float(min(haversine_km(lat, lon, fp[0], fp[1]) for fp in FAULT_POINTS))
 
 def b_value_mle(mags: np.ndarray, mmin: float = 0.0) -> float:
-    """
-    Gutenberg–Richter b-value (Aki, 1965) MLE:
-      b = log10(e) / (mean(M) - (Mmin - dM/2))
-    Burada dM=0.1 varsayıyoruz.
-    """
     mags = np.asarray(mags, dtype=float)
     mags = mags[np.isfinite(mags)]
     mags = mags[mags >= mmin]
@@ -174,7 +165,6 @@ def b_value_mle(mags: np.ndarray, mmin: float = 0.0) -> float:
 def window_events(df: pd.DataFrame, center_lat: float, center_lon: float,
                   start_dt: datetime.datetime, end_dt: datetime.datetime,
                   radius_km: float = 30.0) -> pd.DataFrame:
-    # Zaman + yarıçap filtresi
     sub = df[(df["time"] >= start_dt) & (df["time"] < end_dt)].copy()
     if len(sub) == 0:
         return sub
@@ -182,37 +172,21 @@ def window_events(df: pd.DataFrame, center_lat: float, center_lon: float,
     return sub[sub["_dist_km"] <= radius_km].copy()
 
 def compute_reg_features_from_dataset(quake_df: pd.DataFrame, center_lat: float, center_lon: float,
-                                      as_of_date: datetime.date,
-                                      radius_km: float = 30.0) -> dict:
-    """
-    Tab1 için ilçeye özel:
-      - fault_distance
-      - b_value
-      - log_energy
-      - energy_30d / rate
-      - energy_90d / rate
-    Hepsi katalogdan türetilir (CSV yok).
-    """
+                                      as_of_date: datetime.date, radius_km: float = 30.0) -> dict:
     day0 = datetime.datetime.combine(as_of_date, datetime.time.min)
 
-    # 30 gün
     s30 = day0 - datetime.timedelta(days=30)
     sub30 = window_events(quake_df, center_lat, center_lon, s30, day0, radius_km=radius_km)
     mags30 = sub30["mag"].to_numpy() if len(sub30) else np.array([])
     e30 = float(sub30["mag"].apply(mag_to_energy).sum()) if len(sub30) else 0.0
     er30 = float(e30 / 30.0)
 
-    # 90 gün
     s90 = day0 - datetime.timedelta(days=90)
     sub90 = window_events(quake_df, center_lat, center_lon, s90, day0, radius_km=radius_km)
     e90 = float(sub90["mag"].apply(mag_to_energy).sum()) if len(sub90) else 0.0
     er90 = float(e90 / 90.0)
 
-    # b_value (30 gün üzerinden)
-    # mmin: burada 0 aldım, istersen eğitimde kullandığın eşik neyse onu koy
     bval = b_value_mle(mags30, mmin=0.0)
-
-    # log_energy: burada 30 günlük toplam enerji üzerinden
     log_energy = float(np.log1p(e30))
 
     return {
@@ -224,6 +198,83 @@ def compute_reg_features_from_dataset(quake_df: pd.DataFrame, center_lat: float,
         "energy_90d": float(e90),
         "energy_rate_90d": float(er90),
     }
+
+def summarize_roll30(sub: pd.DataFrame):
+    cnt = float(len(sub))
+    if cnt == 0:
+        return {
+            "roll30_count": 0.0,
+            "roll30_maxmag": 0.0,
+            "roll30_meanmag": 0.0,
+            "roll30_depth": 0.0,
+            "roll30_energy_30d": 0.0,
+            "roll30_energy_rate_30d": 0.0,
+        }
+
+    maxmag = float(sub["mag"].max())
+    meanmag = float(sub["mag"].mean())
+    meandepth = float(sub["depth_km"].dropna().mean()) if sub["depth_km"].notna().any() else 0.0
+
+    energies = sub["mag"].apply(mag_to_energy).astype(float)
+    e30 = float(energies.sum())
+    er30 = float(e30 / 30.0)
+
+    return {
+        "roll30_count": cnt,
+        "roll30_maxmag": maxmag,
+        "roll30_meanmag": meanmag,
+        "roll30_depth": meandepth,
+        "roll30_energy_30d": e30,
+        "roll30_energy_rate_30d": er30,
+    }
+
+def compute_roll30_features(
+    quake_df: pd.DataFrame,
+    lat_bin: float,
+    lon_bin: float,
+    as_of_date: datetime.date,
+    center_lat: float,
+    center_lon: float,
+    fallback_radius_km: float = 30.0
+):
+    """
+    1) Hücre (0.1x0.1) içinden hesap
+    2) Boşsa komşu hücrelerden
+    3) Hâlâ boşsa radius fallback
+    """
+    start_dt = datetime.datetime.combine(as_of_date - datetime.timedelta(days=30), datetime.time.min)
+    end_dt = datetime.datetime.combine(as_of_date, datetime.time.min)
+    dfw = quake_df[(quake_df["time"] >= start_dt) & (quake_df["time"] < end_dt)].copy()
+
+    # 1) aynı hücre
+    sub = dfw[
+        (dfw["lat"] >= lat_bin) & (dfw["lat"] < lat_bin + 0.1) &
+        (dfw["lon"] >= lon_bin) & (dfw["lon"] < lon_bin + 0.1)
+    ].copy()
+    if len(sub) > 0:
+        feats = summarize_roll30(sub); feats["_source"] = "cell"; return feats
+
+    # 2) komşu hücreler (1 halka)
+    for dlat in [-0.1, 0.0, 0.1]:
+        for dlon in [-0.1, 0.0, 0.1]:
+            if dlat == 0.0 and dlon == 0.0:
+                continue
+            lb = lat_bin + dlat
+            ob = lon_bin + dlon
+            s2 = dfw[
+                (dfw["lat"] >= lb) & (dfw["lat"] < lb + 0.1) &
+                (dfw["lon"] >= ob) & (dfw["lon"] < ob + 0.1)
+            ].copy()
+            if len(s2) > 0:
+                feats = summarize_roll30(s2); feats["_source"] = "neighbor_cell"; return feats
+
+    # 3) radius fallback
+    dfw["_dist_km"] = dfw.apply(
+        lambda r: haversine_km(center_lat, center_lon, float(r["lat"]), float(r["lon"])),
+        axis=1
+    )
+    s3 = dfw[dfw["_dist_km"] <= fallback_radius_km].copy()
+    feats = summarize_roll30(s3); feats["_source"] = "radius"; return feats
 
 # =========================
 # Arayüz
@@ -253,18 +304,11 @@ with tab1:
         input_lon = float(row["lon"])
         st.caption(f"Seçilen ilçe merkez koordinatı: **{input_lat:.5f}, {input_lon:.5f}**")
 
-        # Derinlik UI'dan kaldırıldı (arkada sabit)
-        default_depth_km = 10.0
-
+        default_depth_km = 10.0  # UI'dan kaldırıldı
         start_date = st.date_input("Başlangıç Tarihi", datetime.date.today(), key="start_date_reg")
 
-    # ✅ İlçeye göre verisetinden otomatik hesap (katalogdan)
-    auto_reg = compute_reg_features_from_dataset(
-        quake_catalog, input_lat, input_lon, start_date,
-        radius_km=30.0
-    )
+    auto_reg = compute_reg_features_from_dataset(quake_catalog, input_lat, input_lon, start_date, radius_km=30.0)
 
-    # İlçe / tarih değişince state'e yaz ki UI güncellensin
     reg_ctx = f"{selected_district}|{start_date.isoformat()}"
     if st.session_state.get("last_reg_ctx") != reg_ctx:
         st.session_state["last_reg_ctx"] = reg_ctx
@@ -333,7 +377,7 @@ with tab1:
             st.error(f"Tahmin hatası: {e}")
 
 # =========================================================
-# TAB 2: SINIFLANDIRMA (aynı kalabilir)
+# TAB 2: SINIFLANDIRMA (Deprem Olasılığı)
 # =========================================================
 with tab2:
     st.header("İlçe Bazlı 1 Haftalık Deprem Olasılığı (M ≥ 3.0)")
@@ -354,8 +398,74 @@ with tab2:
 
         start_date_c = st.date_input("Başlangıç Tarihi", datetime.date.today(), key="start_date_c")
 
-    # Tab2 için: senin önceki compute_roll30_features fonksiyonun burada devam edebilir.
-    st.info("Tab2 kısmı sende zaten çalışıyordu; istersen aynı mantıkla bırakalım.")
+    # ✅ Otomatik 30 günlük feature (katalogdan)
+    auto_feats = compute_roll30_features(
+        quake_catalog, lat_bin, lon_bin, start_date_c,
+        center_lat=c_lat, center_lon=c_lon,
+        fallback_radius_km=30.0
+    )
+
+    # İlçe/tarih değişince UI state güncelle (0 kalmasın)
+    ctx = f"{selected_district_c}|{start_date_c.isoformat()}|{lat_bin:.1f}|{lon_bin:.1f}"
+    if st.session_state.get("last_roll30_ctx") != ctx:
+        st.session_state["last_roll30_ctx"] = ctx
+        st.session_state["roll30_count_key"] = float(auto_feats["roll30_count"])
+        st.session_state["roll30_maxmag_key"] = float(auto_feats["roll30_maxmag"])
+        st.session_state["roll30_meanmag_key"] = float(auto_feats["roll30_meanmag"])
+        st.session_state["roll30_depth_key"] = float(auto_feats["roll30_depth"])
+
+    with c2:
+        roll30_count = st.number_input("Son 30 gündeki deprem sayısı", key="roll30_count_key")
+        roll30_maxmag = st.number_input("Son 30 gündeki maks. büyüklük", key="roll30_maxmag_key")
+        roll30_meanmag = st.number_input("Son 30 gündeki ort. büyüklük", key="roll30_meanmag_key")
+        roll30_depth = st.number_input("Son 30 gündeki ort. derinlik", key="roll30_depth_key")
+
+        roll30_energy = float(auto_feats["roll30_energy_30d"])
+        roll30_energy_rate = float(auto_feats["roll30_energy_rate_30d"])
+
+        src = auto_feats.get("_source", "cell")
+        src_map = {"cell": "aynı hücre", "neighbor_cell": "komşu hücre", "radius": "yakın çevre (radius)"}
+        st.caption(f"30 günlük değerler katalogdan otomatik dolduruldu (kaynak: **{src_map.get(src, src)}**).")
+
+    if st.button("1 Haftalık Risk Hesapla", type="primary", key="btn_clf"):
+        dates = week_dates(start_date_c, 7)
+        rows = []
+
+        for d in dates:
+            df_date = derive_date_features(d)
+
+            feats_d = compute_roll30_features(
+                quake_catalog, lat_bin, lon_bin, d,
+                center_lat=c_lat, center_lon=c_lon,
+                fallback_radius_km=30.0
+            )
+
+            rows.append({
+                "date": d,
+                "lat_bin": float(lat_bin),
+                "lon_bin": float(lon_bin),
+                "roll30_count": float(feats_d["roll30_count"]),
+                "roll30_maxmag": float(feats_d["roll30_maxmag"]),
+                "roll30_meanmag": float(feats_d["roll30_meanmag"]),
+                "roll30_depth": float(feats_d["roll30_depth"]),
+                "roll30_energy_30d": float(feats_d["roll30_energy_30d"]),
+                "roll30_energy_rate_30d": float(feats_d["roll30_energy_rate_30d"]),
+                "month": df_date["month"],
+                "dow": df_date["dow"],
+                "dayofyear": df_date["dayofyear"],
+            })
+
+        pred_df = pd.DataFrame(rows)
+        model_input = pred_df.drop(columns=["date"]).copy()
+
+        try:
+            pred_df["prob"] = rf_clf.predict_proba(model_input)[:, 1]
+            show_df = pred_df[["date", "prob"]].copy()
+            show_df["prob_%"] = (show_df["prob"] * 100).round(2)
+            st.success("1 haftalık risk üretildi ✅")
+            st.dataframe(show_df.drop(columns=["prob"]), use_container_width=True)
+        except Exception as e:
+            st.error(f"Sınıflandırma hatası: {e}")
 
 st.markdown("---")
 st.caption("Geliştirilen bu arayüz prototip amaçlıdır. TÜBİTAK projesi kapsamında kullanılamaz.")
