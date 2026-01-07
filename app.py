@@ -236,6 +236,7 @@ with tab1:
                 "log_energy_30d": log_e30,
                 "log_energy_90d": log_e90,
                 "log_energy_rate_30d": log_er30,
+                "log_energy_rate_30d": log_er30,
                 "log_energy_rate_90d": log_er90,
                 "month": df_date["month"],
                 "dow": df_date["dow"],
@@ -290,13 +291,21 @@ with tab2:
     }
     defv.update(auto_feats)
 
+    # ✅ İlçe / tarih değişince otomatik değerleri UI state'e yaz
+    state_prefix = f"roll30_{selected_district_c}_{start_date_c.isoformat()}_{lat_bin:.1f}_{lon_bin:.1f}"
+    if st.session_state.get("last_roll30_ctx") != state_prefix:
+        st.session_state["last_roll30_ctx"] = state_prefix
+        st.session_state["roll30_count_key"] = float(defv["roll30_count"])
+        st.session_state["roll30_maxmag_key"] = float(defv["roll30_maxmag"])
+        st.session_state["roll30_meanmag_key"] = float(defv["roll30_meanmag"])
+        st.session_state["roll30_depth_key"] = float(defv["roll30_depth"])
+
     with c2:
-        # UI'da varsayılan olarak otomatik hesaplanan değerler görünür.
-        # Kullanıcı isterse override eder.
-        roll30_count = st.number_input("Son 30 gündeki deprem sayısı", value=float(defv["roll30_count"]))
-        roll30_maxmag = st.number_input("Son 30 gündeki maks. büyüklük", value=float(defv["roll30_maxmag"]))
-        roll30_meanmag = st.number_input("Son 30 gündeki ort. büyüklük", value=float(defv["roll30_meanmag"]))
-        roll30_depth = st.number_input("Son 30 gündeki ort. derinlik", value=float(defv["roll30_depth"]))
+        # UI'da otomatik hesaplanan değerler görünür (state üzerinden)
+        roll30_count = st.number_input("Son 30 gündeki deprem sayısı", key="roll30_count_key")
+        roll30_maxmag = st.number_input("Son 30 gündeki maks. büyüklük", key="roll30_maxmag_key")
+        roll30_meanmag = st.number_input("Son 30 gündeki ort. büyüklük", key="roll30_meanmag_key")
+        roll30_depth = st.number_input("Son 30 gündeki ort. derinlik", key="roll30_depth_key")
 
         # enerji UI yok -> arkada otomatik
         roll30_energy = float(defv["roll30_energy_30d"])
